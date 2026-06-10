@@ -60,8 +60,10 @@ export async function initDatabase(): Promise<void> {
       code TEXT NOT NULL UNIQUE,
       quota INTEGER,
       close_time DATETIME,
+      version_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE
+      FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE,
+      FOREIGN KEY (version_id) REFERENCES survey_versions(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS survey_versions (
@@ -84,6 +86,7 @@ export async function initDatabase(): Promise<void> {
       submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       is_test BOOLEAN DEFAULT 0,
       channel_status TEXT DEFAULT 'normal',
+      block_reason TEXT,
       FOREIGN KEY (survey_id) REFERENCES surveys(id) ON DELETE CASCADE,
       FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE SET NULL,
       FOREIGN KEY (version_id) REFERENCES survey_versions(id) ON DELETE SET NULL
@@ -148,6 +151,24 @@ export async function initDatabase(): Promise<void> {
       await db.exec("ALTER TABLE responses ADD COLUMN channel_status TEXT DEFAULT 'normal'");
     } catch (e) {
       console.log('Column channel_status already exists or alter failed:', e);
+    }
+  }
+
+  const hasBlockReason = await columnExists('responses', 'block_reason');
+  if (!hasBlockReason) {
+    try {
+      await db.exec('ALTER TABLE responses ADD COLUMN block_reason TEXT');
+    } catch (e) {
+      console.log('Column block_reason already exists or alter failed:', e);
+    }
+  }
+
+  const hasChannelVersionId = await columnExists('channels', 'version_id');
+  if (!hasChannelVersionId) {
+    try {
+      await db.exec('ALTER TABLE channels ADD COLUMN version_id TEXT REFERENCES survey_versions(id) ON DELETE SET NULL');
+    } catch (e) {
+      console.log('Column version_id already exists or alter failed:', e);
     }
   }
 

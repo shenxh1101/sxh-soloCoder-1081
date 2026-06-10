@@ -61,7 +61,9 @@ export interface Channel {
   code: string;
   quota?: number;
   close_time?: string;
+  version_id?: string;
   created_at: string;
+  version?: SurveyVersion;
 }
 
 export interface SurveyVersion {
@@ -103,6 +105,7 @@ export interface Response {
   submitted_at: string;
   is_test: boolean;
   channel_status: ChannelStatus;
+  block_reason?: string;
   answers?: Answer[];
   version?: SurveyVersion;
 }
@@ -132,16 +135,30 @@ export interface ResponseSubmission {
   answers: AnswerSubmission[];
 }
 
-export interface ChannelStats {
+export interface BlockRecord {
   id: string;
-  name: string;
-  code: string;
+  submitted_at: string;
+  channel_status: ChannelStatus;
+  block_reason: string;
+  is_test: boolean;
+  user_id?: string;
+  ip_address?: string;
+}
+
+export interface ChannelStats {
+  channel_id: string;
+  channel_name: string;
+  channel_code: string;
   quota?: number;
   close_time?: string;
-  totalSubmissions: number;
-  validSubmissions: number;
-  testSubmissions: number;
-  blockedSubmissions: number;
+  version_id?: string;
+  version?: number;
+  response_count: number;
+  valid_submissions: number;
+  test_submissions: number;
+  blocked_submissions: number;
+  percentage: number;
+  recent_blocks?: BlockRecord[];
 }
 
 export interface ApiResponse<T = any> {

@@ -8,8 +8,9 @@ export async function getSurveyStats(req: Request, res: Response, next: NextFunc
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
+    const versionId = req.query.versionId as string | undefined;
 
-    const stats = await statsService.getSurveyStats(surveyId, includeTest);
+    const stats = await statsService.getSurveyStats(surveyId, includeTest, versionId);
     const response: ApiResponse = { success: true, data: stats };
     res.json(response);
   } catch (err) {
@@ -21,8 +22,9 @@ export async function getChannelStats(req: Request, res: Response, next: NextFun
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
+    const versionId = req.query.versionId as string | undefined;
 
-    const stats = await statsService.getChannelStats(surveyId, includeTest);
+    const stats = await statsService.getChannelStats(surveyId, includeTest, versionId);
     const response: ApiResponse = { success: true, data: stats };
     res.json(response);
   } catch (err) {
@@ -34,8 +36,9 @@ export async function getQuestionStats(req: Request, res: Response, next: NextFu
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
+    const versionId = req.query.versionId as string | undefined;
 
-    const stats = await statsService.getQuestionStats(surveyId, includeTest);
+    const stats = await statsService.getQuestionStats(surveyId, includeTest, versionId);
     const response: ApiResponse = { success: true, data: stats };
     res.json(response);
   } catch (err) {
@@ -47,8 +50,9 @@ export async function getResponseTrend(req: Request, res: Response, next: NextFu
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
+    const versionId = req.query.versionId as string | undefined;
 
-    const trend = await statsService.getResponseTrend(surveyId, includeTest);
+    const trend = await statsService.getResponseTrend(surveyId, includeTest, versionId);
     const response: ApiResponse = { success: true, data: trend };
     res.json(response);
   } catch (err) {
@@ -61,10 +65,12 @@ export async function exportResponsesCSV(req: Request, res: Response, next: Next
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
     const channelId = req.query.channelId as string | undefined;
+    const versionId = req.query.versionId as string | undefined;
 
     const filePath = await statsService.exportResponsesToCSV(surveyId, {
       includeTest,
-      channelId
+      channelId,
+      versionId
     });
 
     const fileName = path.basename(filePath);

@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
 import db from '../config/database';
-import { Channel, ChannelStats } from '../types';
+import { Channel, ChannelStats, BlockRecord } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { getSurveyById } from './surveyService';
+import { getLatestVersion } from './versionService';
 
 export interface ChannelCreateData {
   survey_id: string;
@@ -27,6 +28,11 @@ export async function createChannel(data: ChannelCreateData): Promise<Channel> {
     throw new AppError('Survey not found', 404);
   }
 
+  const latestVersion = await getLatestVersion(data.survey_id);
+  if (!latestVersion) {
+    throw new AppError('Survey has not been published yet, please publish first', 400);
+  }
+
   const id = uuidv4();
   const code = generateChannelCode();
   const now = new Date().toISOString();
@@ -40,8 +46,8 @@ export async function createChannel(data: ChannelCreateData): Promise<Channel> {
   }
 
   const stmt = db.prepare(`
-    INSERT INTO channels (id, survey_id, name, code, quota, close_time, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO channels (id, survey_id, name, code, quota, close_time, version_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   await stmt.run(
@@ -51,20 +57,40 @@ export async function createChannel(data: ChannelCreateData): Promise<Channel> {
     code,
     data.quota !== undefined ? data.quota : null,
     data.close_time || null,
+    latestVersion.id,
     now
   );
 
   return (await getChannelById(id)) as Channel;
 }
 
+async function populateChannelVersion(channel: Channel): Promise<Channel> {
+  if (channel.version_id) {
+    const { getVersionById } = await import('./versionService');
+    const version = await getVersionById(channel.version_id);
+    if (version) {
+      channel.version = version;
+    }
+  }
+  return channel;
+}
+
 export async function getChannelById(id: string): Promise<Channel | undefined> {
   const stmt = db.prepare('SELECT * FROM channels WHERE id = ?');
-  return await stmt.get(id) as Channel | undefined;
+  const channel = await stmt.get(id) as Channel | undefined;
+  if (channel) {
+    return await populateChannelVersion(channel);
+  }
+  return channel;
 }
 
 export async function getChannelByCode(code: string): Promise<Channel | undefined> {
   const stmt = db.prepare('SELECT * FROM channels WHERE code = ?');
-  return await stmt.get(code) as Channel | undefined;
+  const channel = await stmt.get(code) as Channel | undefined;
+  if (channel) {
+    return await populateChannelVersion(channel);
+  }
+  return channel;
 }
 
 export async function getChannelsBySurveyId(surveyId: string): Promise<Channel[]> {
@@ -74,23 +100,25 @@ export async function getChannelsBySurveyId(surveyId: string): Promise<Channel[]
   }
 
   const stmt = db.prepare('SELECT * FROM channels WHERE survey_id = ? ORDER BY created_at DESC');
-  return await stmt.all(surveyId) as Channel[];
+  const channels = await stmt.all(surveyId) as Channel[];
+  return await Promise.all(channels.map(populateChannelVersion));
 }
 
 export async function getChannelWithStats(surveyId: string): Promise<ChannelStats[]> {
-  await getChannelsBySurveyId(surveyId);
+  const channels = await getChannelsBySurveyId(surveyId);
 
   const stmt = db.prepare(`
     SELECT 
-      c.id,
-      c.name,
-      c.code,
+      c.id as channel_id,
+      c.name as channel_name,
+      c.code as channel_code,
       c.quota,
       c.close_time,
-      COUNT(DISTINCT r.id) as totalSubmissions,
-      COUNT(DISTINCT CASE WHEN r.is_test = 0 THEN r.id END) as validSubmissions,
-      COUNT(DISTINCT CASE WHEN r.is_test = 1 THEN r.id END) as testSubmissions,
-      COUNT(DISTINCT CASE WHEN r.channel_status != 'normal' THEN r.id END) as blockedSubmissions
+      c.version_id,
+      COUNT(DISTINCT r.id) as response_count,
+      COUNT(DISTINCT CASE WHEN r.is_test = 0 AND r.channel_status = 'normal' THEN r.id END) as valid_submissions,
+      COUNT(DISTINCT CASE WHEN r.is_test = 1 AND r.channel_status = 'normal' THEN r.id END) as test_submissions,
+      COUNT(DISTINCT CASE WHEN r.channel_status != 'normal' THEN r.id END) as blocked_submissions
     FROM channels c
     LEFT JOIN responses r ON c.id = r.channel_id
     WHERE c.survey_id = ?
@@ -98,7 +126,31 @@ export async function getChannelWithStats(surveyId: string): Promise<ChannelStat
     ORDER BY c.created_at DESC
   `);
 
-  return await stmt.all(surveyId) as ChannelStats[];
+  const stats = await stmt.all(surveyId) as ChannelStats[];
+
+  for (const stat of stats) {
+    if (stat.quota && stat.quota > 0) {
+      stat.percentage = Math.round((stat.valid_submissions / stat.quota) * 100);
+    } else {
+      stat.percentage = 0;
+    }
+
+    const channel = channels.find(c => c.id === stat.channel_id);
+    if (channel?.version) {
+      stat.version = channel.version.version;
+    }
+
+    const blocksStmt = db.prepare(`
+      SELECT id, submitted_at, channel_status, block_reason, is_test, user_id, ip_address
+      FROM responses
+      WHERE channel_id = ? AND channel_status != 'normal'
+      ORDER BY submitted_at DESC
+      LIMIT 10
+    `);
+    stat.recent_blocks = await blocksStmt.all(stat.channel_id) as BlockRecord[];
+  }
+
+  return stats;
 }
 
 export async function generateSurveyLink(surveyId: string, baseUrl: string, channelCode?: string): Promise<string> {

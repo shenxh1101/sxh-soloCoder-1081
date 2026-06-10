@@ -1,10 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import db from '../config/database';
-import { Response, Answer, ResponseSubmission, Question, SkipLogic } from '../types';
+import { Response, Answer, ResponseSubmission, Question, SkipLogic, SurveySnapshot } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { checkSurveyAvailability, getSurveyById } from './surveyService';
 import { getQuestionsBySurveyId } from './questionService';
 import { getChannelByCode } from './channelService';
+import { getVersionById } from './versionService';
 
 export interface ValidationError {
   questionId: string;
@@ -263,7 +264,7 @@ async function checkChannelAvailability(channelId: string, isTest: boolean): Pro
   if (channel.quota !== null && channel.quota !== undefined) {
     const countStmt = db.prepare(`
       SELECT COUNT(*) as count FROM responses
-      WHERE channel_id = ? AND is_test = ?
+      WHERE channel_id = ? AND is_test = ? AND channel_status = 'normal'
     `);
     const countResult = await countStmt.get(channelId, isTest ? 1 : 0) as { count: number };
 
@@ -280,6 +281,52 @@ async function checkChannelAvailability(channelId: string, isTest: boolean): Pro
   return { available: true, status: 'normal' };
 }
 
+async function recordBlockedResponse(
+  submission: ResponseSubmission,
+  ipAddress: string | undefined,
+  channelId: string | undefined,
+  versionId: string | undefined,
+  channelStatus: 'normal' | 'quota_exceeded' | 'expired' | 'closed',
+  blockReason: string
+): Promise<string> {
+  const responseId = uuidv4();
+  const now = new Date().toISOString();
+
+  const stmt = db.prepare(`
+    INSERT INTO responses (
+      id, survey_id, channel_id, version_id, user_id, ip_address, submitted_at, is_test, channel_status, block_reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  await stmt.run(
+    responseId,
+    submission.survey_id,
+    channelId || null,
+    versionId || null,
+    submission.user_id || null,
+    ipAddress || null,
+    now,
+    submission.is_test ?? false,
+    channelStatus,
+    blockReason
+  );
+
+  return responseId;
+}
+
+async function getVersionQuestions(versionId: string): Promise<Question[]> {
+  const version = await getVersionById(versionId);
+  if (!version || !version.snapshotData) {
+    return [];
+  }
+  const snapshot = version.snapshotData as SurveySnapshot;
+  const questions = snapshot.questions.map(q => {
+    const options = snapshot.options.filter(o => o.question_id === q.id);
+    return { ...q, options };
+  });
+  return questions;
+}
+
 export async function submitResponse(
   submission: ResponseSubmission,
   ipAddress?: string
@@ -290,12 +337,48 @@ export async function submitResponse(
   }
 
   const isTest = submission.is_test ?? false;
+
+  let channelId: string | undefined;
+  let versionId: string | undefined;
+  let versionNumber: number | undefined;
+
+  if (submission.channel_code) {
+    const channel = await getChannelByCode(submission.channel_code);
+    if (!channel || channel.survey_id !== submission.survey_id) {
+      throw new AppError('Invalid channel code', 400);
+    }
+    channelId = channel.id;
+    versionId = channel.version_id;
+    if (channel.version) {
+      versionNumber = channel.version.version;
+    }
+  }
+
+  if (!versionId) {
+    const { getLatestVersion } = await import('./versionService');
+    const latestVersion = await getLatestVersion(submission.survey_id);
+    if (latestVersion) {
+      versionId = latestVersion.id;
+      versionNumber = latestVersion.version;
+    }
+  }
+
   const availability = await checkSurveyAvailability(submission.survey_id, submission.user_id, isTest);
   if (!availability.available) {
     const statusCode = availability.errorCode === 'MAX_SUBMISSIONS_REACHED' ? 400 : 403;
     const errorMessage = availability.errorCode
       ? `[${availability.errorCode}] ${availability.reason}`
       : availability.reason || 'Survey is not available';
+
+    await recordBlockedResponse(
+      submission,
+      ipAddress,
+      channelId,
+      versionId,
+      'closed',
+      errorMessage
+    );
+
     throw new AppError(errorMessage, statusCode);
   }
 
@@ -303,38 +386,47 @@ export async function submitResponse(
     throw new AppError('User ID is required for non-anonymous surveys', 400);
   }
 
-  let channelId: string | undefined;
-  let channelStatus: 'normal' | 'quota_exceeded' | 'expired' = 'normal';
-  if (submission.channel_code) {
-    const channel = await getChannelByCode(submission.channel_code);
-    if (!channel || channel.survey_id !== submission.survey_id) {
-      throw new AppError('Invalid channel code', 400);
-    }
-    channelId = channel.id;
-
+  let channelStatus: 'normal' | 'quota_exceeded' | 'expired' | 'closed' = 'normal';
+  if (channelId) {
     const channelCheck = await checkChannelAvailability(channelId, isTest);
     if (!channelCheck.available) {
-      throw new AppError(
-        `[${channelCheck.errorCode}] ${channelCheck.reason}`,
-        403
+      const errorMessage = `[${channelCheck.errorCode}] ${channelCheck.reason}`;
+
+      await recordBlockedResponse(
+        submission,
+        ipAddress,
+        channelId,
+        versionId,
+        channelCheck.status,
+        errorMessage
       );
+
+      throw new AppError(errorMessage, 403);
     }
     channelStatus = channelCheck.status;
   }
 
-  const { getLatestVersion } = await import('./versionService');
-  const latestVersion = await getLatestVersion(submission.survey_id);
-  let versionId: string | undefined;
-  let versionNumber: number | undefined;
-  if (latestVersion) {
-    versionId = latestVersion.id;
-    versionNumber = latestVersion.version;
+  let questions: Question[];
+  if (versionId) {
+    questions = await getVersionQuestions(versionId);
+  } else {
+    questions = await getQuestionsBySurveyId(submission.survey_id);
   }
 
-  const questions = await getQuestionsBySurveyId(submission.survey_id);
   const validation = validateResponse(submission, questions);
   if (!validation.valid) {
-    throw new AppError(`Validation failed: ${validation.errors.map(e => e.error).join('; ')}`, 400);
+    const errorMessage = `Validation failed: ${validation.errors.map(e => e.error).join('; ')}`;
+
+    await recordBlockedResponse(
+      submission,
+      ipAddress,
+      channelId,
+      versionId,
+      'normal',
+      errorMessage
+    );
+
+    throw new AppError(errorMessage, 400);
   }
 
   const responseId = uuidv4();
@@ -395,6 +487,14 @@ export async function getResponseById(id: string): Promise<(Response & { answers
   if (!response) return undefined;
 
   response.is_test = Boolean(response.is_test);
+
+  if (response.version_id) {
+    const { getVersionById } = await import('./versionService');
+    const version = await getVersionById(response.version_id);
+    if (version) {
+      response.version = version;
+    }
+  }
 
   const answerStmt = db.prepare('SELECT * FROM answers WHERE response_id = ?');
   const answers = await answerStmt.all(id) as Array<Omit<Answer, 'option_ids'> & { option_ids: string | null }>;

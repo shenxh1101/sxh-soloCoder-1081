@@ -3,9 +3,11 @@ import { AppError } from '../middleware/errorHandler';
 import { getSurveyById } from './surveyService';
 import { getQuestionsBySurveyId } from './questionService';
 import { getChannelWithStats } from './channelService';
+import { getVersionById, getVersionsBySurveyId } from './versionService';
 import { createObjectCsvWriter } from 'csv-writer';
 import path from 'path';
 import fs from 'fs';
+import { Question, SurveySnapshot } from '../types';
 
 export interface ChannelStats {
   channel_id: string;
@@ -51,26 +53,70 @@ export interface SurveyOverview {
   created_at: string;
 }
 
-export async function getSurveyStats(surveyId: string, includeTest: boolean = false): Promise<SurveyOverview> {
+async function getQuestionsForStats(surveyId: string, versionId?: string): Promise<Question[]> {
+  if (versionId) {
+    const version = await getVersionById(versionId);
+    if (!version || !version.snapshotData) {
+      return [];
+    }
+    const snapshot = version.snapshotData as SurveySnapshot;
+    return snapshot.questions.map(q => {
+      const options = snapshot.options.filter(o => o.question_id === q.id);
+      return { ...q, options };
+    });
+  }
+  return await getQuestionsBySurveyId(surveyId);
+}
+
+function buildVersionFilter(versionId?: string, tableAlias: string = 'r'): { clause: string; params: string[] } {
+  if (versionId) {
+    const prefix = tableAlias ? `${tableAlias}.` : '';
+    return { clause: `AND ${prefix}version_id = ?`, params: [versionId] };
+  }
+  return { clause: '', params: [] };
+}
+
+export async function getSurveyStats(
+  surveyId: string,
+  includeTest: boolean = false,
+  versionId?: string
+): Promise<SurveyOverview & { version_id?: string; version?: number; versions?: Array<{ id: string; version: number; published_at: string }> }> {
   const survey = await getSurveyById(surveyId);
   if (!survey) {
     throw new AppError('Survey not found', 404);
   }
 
+  const versionFilter = buildVersionFilter(versionId, '');
+  const allVersions = await getVersionsBySurveyId(surveyId);
+  const versionList = allVersions.map(v => ({
+    id: v.id,
+    version: v.version,
+    published_at: v.published_at
+  }));
+
+  const countParams = [surveyId, ...versionFilter.params];
   const responseCountStmt = db.prepare(`
     SELECT
       COUNT(*) as total,
       SUM(CASE WHEN is_test = 1 THEN 1 ELSE 0 END) as test_count
-    FROM responses WHERE survey_id = ?
+    FROM responses WHERE survey_id = ? ${versionFilter.clause}
   `);
-  const counts = await responseCountStmt.get(surveyId) as { total: number; test_count: number };
+  const counts = await responseCountStmt.get(...countParams) as { total: number; test_count: number };
 
   const totalResponses = counts.total || 0;
   const testResponses = counts.test_count || 0;
   const validResponses = includeTest ? totalResponses : totalResponses - testResponses;
 
-  const channelStats = await getChannelStats(surveyId, includeTest);
-  const questionStats = await getQuestionStats(surveyId, includeTest);
+  const channelStats = await getChannelStats(surveyId, includeTest, versionId);
+  const questionStats = await getQuestionStats(surveyId, includeTest, versionId);
+
+  let versionNumber: number | undefined;
+  if (versionId) {
+    const version = allVersions.find(v => v.id === versionId);
+    if (version) {
+      versionNumber = version.version;
+    }
+  }
 
   return {
     survey_id: survey.id,
@@ -82,12 +128,32 @@ export async function getSurveyStats(surveyId: string, includeTest: boolean = fa
     question_stats: questionStats,
     start_time: survey.start_time,
     end_time: survey.end_time,
-    created_at: survey.created_at
+    created_at: survey.created_at,
+    version_id: versionId,
+    version: versionNumber,
+    versions: versionList
   };
 }
 
-export async function getChannelStats(surveyId: string, includeTest: boolean = false): Promise<ChannelStats[]> {
-  const testFilter = includeTest ? '' : 'AND r.is_test = 0';
+export async function getChannelStats(
+  surveyId: string,
+  includeTest: boolean = false,
+  versionId?: string
+): Promise<ChannelStats[]> {
+  const joinConditions: string[] = ['c.id = r.channel_id'];
+  const params: any[] = [surveyId];
+  
+  if (!includeTest) {
+    joinConditions.push('r.is_test = 0');
+  }
+  
+  if (versionId) {
+    joinConditions.push('r.version_id = ?');
+    params.push(versionId);
+  }
+  
+  const joinClause = joinConditions.join(' AND ');
+  
   const stmt = db.prepare(`
     SELECT 
       c.id,
@@ -95,41 +161,58 @@ export async function getChannelStats(surveyId: string, includeTest: boolean = f
       c.code,
       c.quota,
       c.close_time,
+      c.version_id,
       COUNT(DISTINCT r.id) as total_count,
-      COUNT(DISTINCT CASE WHEN r.is_test = 0 THEN r.id END) as valid_count,
-      COUNT(DISTINCT CASE WHEN r.is_test = 1 THEN r.id END) as test_count,
+      COUNT(DISTINCT CASE WHEN r.is_test = 0 AND r.channel_status = 'normal' THEN r.id END) as valid_count,
+      COUNT(DISTINCT CASE WHEN r.is_test = 1 AND r.channel_status = 'normal' THEN r.id END) as test_count,
       COUNT(DISTINCT CASE WHEN r.channel_status != 'normal' THEN r.id END) as blocked_count
     FROM channels c
-    LEFT JOIN responses r ON c.id = r.channel_id ${testFilter}
+    LEFT JOIN responses r ON ${joinClause}
     WHERE c.survey_id = ?
     GROUP BY c.id
     ORDER BY total_count DESC
   `);
-
-  const results = await stmt.all(surveyId) as Array<{
-    id: string; name: string; code: string; quota?: number; close_time?: string;
+  const results = await stmt.all(...params) as Array<{
+    id: string; name: string; code: string; quota?: number; close_time?: string; version_id?: string;
     total_count: number; valid_count: number; test_count: number; blocked_count: number;
   }>;
 
   const total = results.reduce((sum, r) => sum + r.total_count, 0);
 
-  return results.map(r => ({
-    channel_id: r.id,
-    channel_name: r.name,
-    channel_code: r.code,
-    response_count: r.total_count,
-    valid_submissions: r.valid_count,
-    test_submissions: r.test_count,
-    blocked_submissions: r.blocked_count,
-    percentage: total > 0 ? Math.round((r.total_count / total) * 10000) / 100 : 0,
-    quota: r.quota ?? undefined,
-    close_time: r.close_time ?? undefined
-  }));
+  const allVersions = await getVersionsBySurveyId(surveyId);
+
+  return results.map(r => {
+    let versionNumber: number | undefined;
+    if (r.version_id) {
+      const v = allVersions.find(v => v.id === r.version_id);
+      if (v) versionNumber = v.version;
+    }
+    return {
+      channel_id: r.id,
+      channel_name: r.name,
+      channel_code: r.code,
+      response_count: r.total_count,
+      valid_submissions: r.valid_count,
+      test_submissions: r.test_count,
+      blocked_submissions: r.blocked_count,
+      percentage: total > 0 ? Math.round((r.total_count / total) * 10000) / 100 : 0,
+      quota: r.quota ?? undefined,
+      close_time: r.close_time ?? undefined,
+      version_id: r.version_id,
+      version: versionNumber
+    };
+  });
 }
 
-export async function getQuestionStats(surveyId: string, includeTest: boolean = false): Promise<QuestionStats[]> {
-  const questions = await getQuestionsBySurveyId(surveyId);
+export async function getQuestionStats(
+  surveyId: string,
+  includeTest: boolean = false,
+  versionId?: string
+): Promise<QuestionStats[]> {
+  const questions = await getQuestionsForStats(surveyId, versionId);
   const testFilter = includeTest ? '' : 'AND r.is_test = 0';
+  const versionFilter = buildVersionFilter(versionId);
+  const statusFilter = 'AND r.channel_status = \'normal\'';
 
   const stats: QuestionStats[] = [];
 
@@ -141,12 +224,13 @@ export async function getQuestionStats(surveyId: string, includeTest: boolean = 
       total_responses: 0
     };
 
+    const countParams = [question.id, ...versionFilter.params];
     const countStmt = db.prepare(`
       SELECT COUNT(*) as count FROM answers a
       JOIN responses r ON a.response_id = r.id
-      WHERE a.question_id = ? ${testFilter}
+      WHERE a.question_id = ? ${testFilter} ${statusFilter} ${versionFilter.clause}
     `);
-    const countResult = await countStmt.get(question.id) as { count: number };
+    const countResult = await countStmt.get(...countParams) as { count: number };
     baseStats.total_responses = countResult.count || 0;
 
     if (question.type === 'single' || question.type === 'multiple') {
@@ -154,16 +238,14 @@ export async function getQuestionStats(surveyId: string, includeTest: boolean = 
 
       if (question.options) {
         for (const option of question.options) {
+          const optionCountParams = [question.id, `%${option.id}%`, ...versionFilter.params];
           const optionCountStmt = db.prepare(`
             SELECT COUNT(*) as count FROM answers a
             JOIN responses r ON a.response_id = r.id
-            WHERE a.question_id = ? ${testFilter}
+            WHERE a.question_id = ? ${testFilter} ${statusFilter} ${versionFilter.clause}
             AND a.option_ids LIKE ?
           `);
-          const optionCount = await optionCountStmt.get(
-            question.id,
-            `%${option.id}%`
-          ) as { count: number };
+          const optionCount = await optionCountStmt.get(...optionCountParams) as { count: number };
 
           const count = optionCount.count || 0;
           optionStats.push({
@@ -180,12 +262,13 @@ export async function getQuestionStats(surveyId: string, includeTest: boolean = 
 
       baseStats.options = optionStats;
     } else if (question.type === 'rating') {
+      const avgParams = [question.id, ...versionFilter.params];
       const avgStmt = db.prepare(`
         SELECT AVG(a.score) as avg_score FROM answers a
         JOIN responses r ON a.response_id = r.id
-        WHERE a.question_id = ? AND a.score IS NOT NULL ${testFilter}
+        WHERE a.question_id = ? AND a.score IS NOT NULL ${testFilter} ${statusFilter} ${versionFilter.clause}
       `);
-      const avgResult = await avgStmt.get(question.id) as { avg_score: number | null };
+      const avgResult = await avgStmt.get(...avgParams) as { avg_score: number | null };
       baseStats.average_score = avgResult.avg_score
         ? Math.round(avgResult.avg_score * 100) / 100
         : 0;
@@ -201,14 +284,14 @@ export async function getQuestionStats(surveyId: string, includeTest: boolean = 
 
 export async function exportResponsesToCSV(
   surveyId: string,
-  options: { includeTest?: boolean; channelId?: string } = {}
+  options: { includeTest?: boolean; channelId?: string; versionId?: string } = {}
 ): Promise<string> {
   const survey = await getSurveyById(surveyId);
   if (!survey) {
     throw new AppError('Survey not found', 404);
   }
 
-  const questions = await getQuestionsBySurveyId(surveyId);
+  const questions = await getQuestionsForStats(surveyId, options.versionId);
   const includeTest = options.includeTest ?? false;
 
   const whereConditions: string[] = ['r.survey_id = ?'];
@@ -222,6 +305,13 @@ export async function exportResponsesToCSV(
     whereConditions.push('r.channel_id = ?');
     params.push(options.channelId);
   }
+
+  if (options.versionId) {
+    whereConditions.push('r.version_id = ?');
+    params.push(options.versionId);
+  }
+
+  whereConditions.push('r.channel_status = \'normal\'');
 
   const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
@@ -305,7 +395,11 @@ export async function exportResponsesToCSV(
   return filePath;
 }
 
-export async function getResponseTrend(surveyId: string, includeTest: boolean = false): Promise<Array<{
+export async function getResponseTrend(
+  surveyId: string,
+  includeTest: boolean = false,
+  versionId?: string
+): Promise<Array<{
   date: string;
   count: number;
 }>> {
@@ -315,15 +409,19 @@ export async function getResponseTrend(surveyId: string, includeTest: boolean = 
   }
 
   const testFilter = includeTest ? '' : 'AND is_test = 0';
+  const versionFilter = buildVersionFilter(versionId, '');
+  const statusFilter = 'AND channel_status = \'normal\'';
+  const params = [surveyId, ...versionFilter.params];
+
   const stmt = db.prepare(`
     SELECT
       DATE(submitted_at) as date,
       COUNT(*) as count
     FROM responses
-    WHERE survey_id = ? ${testFilter}
+    WHERE survey_id = ? ${testFilter} ${statusFilter} ${versionFilter.clause}
     GROUP BY DATE(submitted_at)
     ORDER BY date ASC
   `);
 
-  return await stmt.all(surveyId) as Array<{ date: string; count: number }>;
+  return await stmt.all(...params) as Array<{ date: string; count: number }>;
 }
