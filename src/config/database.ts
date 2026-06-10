@@ -90,7 +90,7 @@ export class Statement {
 
   run(...params: any[]): Promise<{ lastID: number; changes: number }> {
     return new Promise((resolve, reject) => {
-      this.stmt.run(...params, function (err) {
+      this.stmt.run(...params, function (this: sqlite3.RunResult, err: Error | null) {
         if (err) reject(err);
         else resolve({ lastID: this.lastID, changes: this.changes });
       });
@@ -99,7 +99,7 @@ export class Statement {
 
   get<T = any>(...params: any[]): Promise<T | undefined> {
     return new Promise((resolve, reject) => {
-      this.stmt.get(...params, (err, row) => {
+      this.stmt.get(...params, (err: Error | null, row: any) => {
         if (err) reject(err);
         else resolve(row as T | undefined);
       });
@@ -108,7 +108,7 @@ export class Statement {
 
   all<T = any>(...params: any[]): Promise<T[]> {
     return new Promise((resolve, reject) => {
-      this.stmt.all(...params, (err, rows) => {
+      this.stmt.all(...params, (err: Error | null, rows: any[]) => {
         if (err) reject(err);
         else resolve(rows as T[]);
       });

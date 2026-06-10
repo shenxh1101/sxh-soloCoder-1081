@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import db from '../config/database';
-import { Response, Answer, ResponseSubmission, Question } from '../types';
+import { Response, Answer, ResponseSubmission, Question, SkipLogic } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { checkSurveyAvailability, getSurveyById } from './surveyService';
 import { getQuestionsBySurveyId } from './questionService';
@@ -12,20 +12,87 @@ export interface ValidationError {
   error: string;
 }
 
+function buildQuestionOptionMap(questions: Question[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  questions.forEach(q => {
+    if (q.options) {
+      const optionIds = new Set(q.options.map(o => o.id));
+      map.set(q.id, optionIds);
+    }
+  });
+  return map;
+}
+
+function calculateSkippedQuestions(
+  submission: ResponseSubmission,
+  questions: Question[]
+): Set<string> {
+  const skipped = new Set<string>();
+  const sortedQuestions = [...questions].sort((a, b) => a.sort_order - b.sort_order);
+  const answerMap = new Map(submission.answers.map(a => [a.question_id, a]));
+
+  sortedQuestions.forEach((question, index) => {
+    if (skipped.has(question.id)) return;
+
+    const answer = answerMap.get(question.id);
+    if (!answer || !question.skip_logic) return;
+
+    const skipLogic = question.skip_logic as SkipLogic;
+    if (!skipLogic.conditions || skipLogic.conditions.length === 0) return;
+
+    const selectedOptionIds = answer.option_ids || [];
+
+    for (const condition of skipLogic.conditions) {
+      if (selectedOptionIds.includes(condition.optionId)) {
+        const targetIndex = sortedQuestions.findIndex(q => q.id === condition.targetQuestionId);
+        if (targetIndex > index) {
+          for (let i = index + 1; i < targetIndex; i++) {
+            skipped.add(sortedQuestions[i].id);
+          }
+        }
+        break;
+      }
+    }
+
+    if (skipLogic.defaultTarget) {
+      const hasMatchingCondition = skipLogic.conditions.some(c =>
+        selectedOptionIds.includes(c.optionId)
+      );
+      if (!hasMatchingCondition) {
+        const targetIndex = sortedQuestions.findIndex(q => q.id === skipLogic.defaultTarget);
+        if (targetIndex > index) {
+          for (let i = index + 1; i < targetIndex; i++) {
+            skipped.add(sortedQuestions[i].id);
+          }
+        }
+      }
+    }
+  });
+
+  return skipped;
+}
+
 export function validateResponse(
   submission: ResponseSubmission,
   questions: Question[]
 ): { valid: boolean; errors: ValidationError[] } {
   const errors: ValidationError[] = [];
+  const questionOptionMap = buildQuestionOptionMap(questions);
+  const skippedQuestions = calculateSkippedQuestions(submission, questions);
 
   questions.forEach(question => {
     const answer = submission.answers.find(a => a.question_id === question.id);
+    const isSkipped = skippedQuestions.has(question.id);
+
+    if (isSkipped) {
+      return;
+    }
 
     if (question.is_required && !answer) {
       errors.push({
         questionId: question.id,
         questionTitle: question.title,
-        error: 'Required question not answered'
+        error: `Required question '${question.title}' not answered`
       });
       return;
     }
@@ -38,8 +105,20 @@ export function validateResponse(
           errors.push({
             questionId: question.id,
             questionTitle: question.title,
-            error: 'Single choice question requires exactly one option'
+            error: `Single choice question '${question.title}' requires exactly one option`
           });
+        } else {
+          const validOptionIds = questionOptionMap.get(question.id);
+          if (validOptionIds) {
+            const invalidOptions = answer.option_ids.filter(id => !validOptionIds.has(id));
+            if (invalidOptions.length > 0) {
+              errors.push({
+                questionId: question.id,
+                questionTitle: question.title,
+                error: `Invalid option ID(s) for question '${question.title}': ${invalidOptions.join(', ')}`
+              });
+            }
+          }
         }
         break;
 
@@ -48,8 +127,20 @@ export function validateResponse(
           errors.push({
             questionId: question.id,
             questionTitle: question.title,
-            error: 'Multiple choice question requires at least one option'
+            error: `Multiple choice question '${question.title}' requires at least one option`
           });
+        } else {
+          const validOptionIds = questionOptionMap.get(question.id);
+          if (validOptionIds) {
+            const invalidOptions = answer.option_ids.filter(id => !validOptionIds.has(id));
+            if (invalidOptions.length > 0) {
+              errors.push({
+                questionId: question.id,
+                questionTitle: question.title,
+                error: `Invalid option ID(s) for question '${question.title}': ${invalidOptions.join(', ')}`
+              });
+            }
+          }
         }
         break;
 
@@ -59,7 +150,7 @@ export function validateResponse(
             errors.push({
               questionId: question.id,
               questionTitle: question.title,
-              error: 'Text answer is required'
+              error: `Text answer for '${question.title}' is required`
             });
           }
         }
@@ -70,13 +161,13 @@ export function validateResponse(
           errors.push({
             questionId: question.id,
             questionTitle: question.title,
-            error: 'Rating score is required'
+            error: `Rating score for '${question.title}' is required`
           });
         } else if (question.max_score && (answer.score < 0 || answer.score > question.max_score)) {
           errors.push({
             questionId: question.id,
             questionTitle: question.title,
-            error: `Rating score must be between 0 and ${question.max_score}`
+            error: `Rating score for '${question.title}' must be between 0 and ${question.max_score}`
           });
         }
         break;
@@ -98,9 +189,14 @@ export async function submitResponse(
     throw new AppError('Survey not found', 404);
   }
 
-  const availability = await checkSurveyAvailability(submission.survey_id, submission.user_id);
+  const isTest = submission.is_test ?? false;
+  const availability = await checkSurveyAvailability(submission.survey_id, submission.user_id, isTest);
   if (!availability.available) {
-    throw new AppError(availability.reason || 'Survey is not available', 403);
+    const statusCode = availability.errorCode === 'MAX_SUBMISSIONS_REACHED' ? 400 : 403;
+    const errorMessage = availability.errorCode
+      ? `[${availability.errorCode}] ${availability.reason}`
+      : availability.reason || 'Survey is not available';
+    throw new AppError(errorMessage, statusCode);
   }
 
   if (!survey.is_anonymous && !submission.user_id) {
@@ -263,10 +359,14 @@ export async function deleteResponse(id: string): Promise<void> {
   await stmt.run(id);
 }
 
-export async function getUserSubmissionCount(surveyId: string, userId: string): Promise<number> {
+export async function getUserSubmissionCount(
+  surveyId: string,
+  userId: string,
+  includeTest: boolean = false
+): Promise<number> {
   const stmt = db.prepare(`
     SELECT COUNT(*) as count FROM responses
-    WHERE survey_id = ? AND user_id = ? AND is_test = 0
+    WHERE survey_id = ? AND user_id = ? ${includeTest ? '' : 'AND is_test = 0'}
   `);
   const result = await stmt.get(surveyId, userId) as { count: number };
   return result.count;

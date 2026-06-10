@@ -190,9 +190,14 @@ export async function clearTestData(surveyId: string): Promise<{ deletedResponse
   return { deletedAnswers, deletedResponses };
 }
 
-export async function checkSurveyAvailability(surveyId: string, userId?: string): Promise<{
+export async function checkSurveyAvailability(
+  surveyId: string,
+  userId?: string,
+  isTest: boolean = false
+): Promise<{
   available: boolean;
   reason?: string;
+  errorCode?: string;
   survey: Survey;
 }> {
   const survey = await getSurveyById(surveyId);
@@ -203,7 +208,8 @@ export async function checkSurveyAvailability(surveyId: string, userId?: string)
   if (survey.status !== 'active') {
     return {
       available: false,
-      reason: 'Survey is not active',
+      reason: `Survey is currently '${survey.status}', only 'active' surveys accept submissions`,
+      errorCode: 'SURVEY_NOT_ACTIVE',
       survey
     };
   }
@@ -212,7 +218,8 @@ export async function checkSurveyAvailability(surveyId: string, userId?: string)
   if (survey.start_time && new Date(survey.start_time) > now) {
     return {
       available: false,
-      reason: 'Survey has not started yet',
+      reason: `Survey has not started yet, it will open at ${survey.start_time}`,
+      errorCode: 'SURVEY_NOT_STARTED',
       survey
     };
   }
@@ -220,22 +227,26 @@ export async function checkSurveyAvailability(surveyId: string, userId?: string)
   if (survey.end_time && new Date(survey.end_time) < now) {
     return {
       available: false,
-      reason: 'Survey has ended',
+      reason: `Survey has ended, it closed at ${survey.end_time}`,
+      errorCode: 'SURVEY_ENDED',
       survey
     };
   }
 
   if (userId && survey.max_submissions_per_user > 0) {
+    const countTestSubmissions = isTest;
     const stmt = db.prepare(`
       SELECT COUNT(*) as count FROM responses
-      WHERE survey_id = ? AND user_id = ? AND is_test = 0
+      WHERE survey_id = ? AND user_id = ? ${countTestSubmissions ? '' : 'AND is_test = 0'}
     `);
     const result = await stmt.get(surveyId, userId) as { count: number };
 
     if (result.count >= survey.max_submissions_per_user) {
+      const submissionType = countTestSubmissions ? 'test' : 'formal';
       return {
         available: false,
-        reason: 'Maximum submissions reached for this user',
+        reason: `User '${userId}' has exceeded the maximum number of ${submissionType} submissions (${result.count}/${survey.max_submissions_per_user}). Test data ${countTestSubmissions ? 'is' : 'is not'} included in this count.`,
+        errorCode: 'MAX_SUBMISSIONS_REACHED',
         survey
       };
     }

@@ -3,7 +3,7 @@ import * as questionService from '../services/questionService';
 import { validateRequest, questionCreateSchema, questionUpdateSchema } from '../validation/schemas';
 import { ApiResponse } from '../types';
 
-export async function createQuestion(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function createQuestion(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const validation = validateRequest(questionCreateSchema, req.body);
     if (validation.error) {
@@ -12,13 +12,14 @@ export async function createQuestion(req: Request, res: Response<ApiResponse>, n
     }
 
     const question = await questionService.createQuestion(req.body);
-    res.json({ success: true, data: question, message: 'Question created successfully' });
+    const response: ApiResponse = { success: true, data: question, message: 'Question created successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getQuestion(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getQuestion(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const question = await questionService.getQuestionById(id);
@@ -28,33 +29,36 @@ export async function getQuestion(req: Request, res: Response<ApiResponse>, next
       return;
     }
 
-    res.json({ success: true, data: question });
+    const response: ApiResponse = { success: true, data: question };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getQuestionsBySurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getQuestionsBySurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const questions = await questionService.getQuestionsBySurveyId(surveyId);
-    res.json({ success: true, data: questions });
+    const response: ApiResponse = { success: true, data: questions };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getFullSurveyStructure(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getFullSurveyStructure(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const result = await questionService.getFullSurveyStructure(surveyId);
-    res.json({ success: true, data: result });
+    const response: ApiResponse = { success: true, data: result };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function updateQuestion(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function updateQuestion(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const validation = validateRequest(questionUpdateSchema, req.body);
@@ -64,23 +68,25 @@ export async function updateQuestion(req: Request, res: Response<ApiResponse>, n
     }
 
     const question = await questionService.updateQuestion(id, req.body);
-    res.json({ success: true, data: question, message: 'Question updated successfully' });
+    const response: ApiResponse = { success: true, data: question, message: 'Question updated successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function deleteQuestion(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function deleteQuestion(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     await questionService.deleteQuestion(id);
-    res.json({ success: true, message: 'Question deleted successfully' });
+    const response: ApiResponse = { success: true, message: 'Question deleted successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function batchCreateQuestions(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function batchCreateQuestions(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const { questions } = req.body;
@@ -100,7 +106,8 @@ export async function batchCreateQuestions(req: Request, res: Response<ApiRespon
       results.push(result);
     }
 
-    res.json({ success: true, data: results, message: 'Questions created successfully' });
+    const response: ApiResponse = { success: true, data: results, message: 'Questions created successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }

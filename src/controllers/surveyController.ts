@@ -3,7 +3,7 @@ import * as surveyService from '../services/surveyService';
 import { validateRequest, surveyCreateSchema, surveyUpdateSchema } from '../validation/schemas';
 import { ApiResponse, SurveyStatus } from '../types';
 
-export async function createSurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function createSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const validation = validateRequest(surveyCreateSchema, req.body);
     if (validation.error) {
@@ -12,13 +12,14 @@ export async function createSurvey(req: Request, res: Response<ApiResponse>, nex
     }
 
     const survey = await surveyService.createSurvey(req.body);
-    res.json({ success: true, data: survey, message: 'Survey created successfully' });
+    const response: ApiResponse = { success: true, data: survey, message: 'Survey created successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getSurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const survey = await surveyService.getSurveyById(id);
@@ -28,26 +29,28 @@ export async function getSurvey(req: Request, res: Response<ApiResponse>, next: 
       return;
     }
 
-    res.json({ success: true, data: survey });
+    const response: ApiResponse = { success: true, data: survey };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getSurveyList(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getSurveyList(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const pageSize = parseInt(req.query.pageSize as string) || 20;
     const status = req.query.status as SurveyStatus | undefined;
 
     const result = await surveyService.getSurveyList(page, pageSize, status);
-    res.json({ success: true, data: result });
+    const response: ApiResponse = { success: true, data: result };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function updateSurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function updateSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const validation = validateRequest(surveyUpdateSchema, req.body);
@@ -57,52 +60,58 @@ export async function updateSurvey(req: Request, res: Response<ApiResponse>, nex
     }
 
     const survey = await surveyService.updateSurvey(id, req.body);
-    res.json({ success: true, data: survey, message: 'Survey updated successfully' });
+    const response: ApiResponse = { success: true, data: survey, message: 'Survey updated successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function closeSurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function closeSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const survey = await surveyService.closeSurvey(id);
-    res.json({ success: true, data: survey, message: 'Survey closed successfully' });
+    const response: ApiResponse = { success: true, data: survey, message: 'Survey closed successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function deleteSurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function deleteSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     await surveyService.deleteSurvey(id);
-    res.json({ success: true, message: 'Survey deleted successfully' });
+    const response: ApiResponse = { success: true, message: 'Survey deleted successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function clearTestData(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function clearTestData(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const result = await surveyService.clearTestData(id);
-    res.json({
+    const response: ApiResponse = {
       success: true,
       data: result,
       message: `Cleared ${result.deletedResponses} test responses and ${result.deletedAnswers} test answers`
-    });
+    };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function checkAvailability(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function checkAvailability(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const userId = req.query.userId as string | undefined;
-    const result = await surveyService.checkSurveyAvailability(id, userId);
-    res.json({ success: true, data: result });
+    const isTest = req.query.isTest === 'true';
+    const result = await surveyService.checkSurveyAvailability(id, userId, isTest);
+    const response: ApiResponse = { success: true, data: result };
+    res.json(response);
   } catch (err) {
     next(err);
   }

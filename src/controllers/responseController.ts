@@ -3,7 +3,7 @@ import * as responseService from '../services/responseService';
 import { validateRequest, responseSubmissionSchema } from '../validation/schemas';
 import { ApiResponse, ResponseSubmission } from '../types';
 
-export async function submitResponse(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function submitResponse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const validation = validateRequest(responseSubmissionSchema, req.body);
     if (validation.error) {
@@ -14,17 +14,18 @@ export async function submitResponse(req: Request, res: Response<ApiResponse>, n
     const ipAddress = req.ip || req.connection.remoteAddress;
     const result = await responseService.submitResponse(req.body as ResponseSubmission, ipAddress);
 
-    res.json({
+    const response: ApiResponse = {
       success: true,
       data: result,
       message: 'Response submitted successfully'
-    });
+    };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getResponse(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getResponse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const response = await responseService.getResponseById(id);
@@ -34,13 +35,14 @@ export async function getResponse(req: Request, res: Response<ApiResponse>, next
       return;
     }
 
-    res.json({ success: true, data: response });
+    const apiResponse: ApiResponse = { success: true, data: response };
+    res.json(apiResponse);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getResponsesBySurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getResponsesBySurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const page = parseInt(req.query.page as string) || 1;
@@ -55,33 +57,40 @@ export async function getResponsesBySurvey(req: Request, res: Response<ApiRespon
       channelId
     });
 
-    res.json({ success: true, data: result });
+    const response: ApiResponse = { success: true, data: result };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function deleteResponse(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function deleteResponse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     await responseService.deleteResponse(id);
-    res.json({ success: true, message: 'Response deleted successfully' });
+    const response: ApiResponse = { success: true, message: 'Response deleted successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getUserSubmissionCount(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getUserSubmissionCount(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId, userId } = req.params;
-    const count = await responseService.getUserSubmissionCount(surveyId, userId);
-    res.json({ success: true, data: { surveyId, userId, count } });
+    const includeTest = req.query.includeTest === 'true';
+    const count = await responseService.getUserSubmissionCount(surveyId, userId, includeTest);
+    const response: ApiResponse = {
+      success: true,
+      data: { surveyId, userId, count, includeTest }
+    };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function validateResponse(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function validateResponse(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const validation = validateRequest(responseSubmissionSchema, { ...req.body, survey_id: surveyId });
@@ -97,7 +106,8 @@ export async function validateResponse(req: Request, res: Response<ApiResponse>,
       questions
     );
 
-    res.json({ success: true, data: result });
+    const response: ApiResponse = { success: true, data: result };
+    res.json(response);
   } catch (err) {
     next(err);
   }

@@ -4,55 +4,59 @@ import { ApiResponse } from '../types';
 import path from 'path';
 import fs from 'fs';
 
-export async function getSurveyStats(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getSurveyStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
 
     const stats = await statsService.getSurveyStats(surveyId, includeTest);
-    res.json({ success: true, data: stats });
+    const response: ApiResponse = { success: true, data: stats };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getChannelStats(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getChannelStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
 
     const stats = await statsService.getChannelStats(surveyId, includeTest);
-    res.json({ success: true, data: stats });
+    const response: ApiResponse = { success: true, data: stats };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getQuestionStats(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getQuestionStats(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
 
     const stats = await statsService.getQuestionStats(surveyId, includeTest);
-    res.json({ success: true, data: stats });
+    const response: ApiResponse = { success: true, data: stats };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getResponseTrend(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getResponseTrend(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
 
     const trend = await statsService.getResponseTrend(surveyId, includeTest);
-    res.json({ success: true, data: trend });
+    const response: ApiResponse = { success: true, data: trend };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function exportResponsesCSV(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function exportResponsesCSV(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const includeTest = req.query.includeTest === 'true';
@@ -76,7 +80,7 @@ export async function exportResponsesCSV(req: Request, res: Response<ApiResponse
   }
 }
 
-export async function exportResponsesJSON(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function exportResponsesJSON(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const { getResponsesBySurveyId } = await import('../services/responseService');
@@ -98,7 +102,11 @@ export async function exportResponsesJSON(req: Request, res: Response<ApiRespons
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-    res.json(result);
+    const response: ApiResponse = {
+      success: true,
+      data: result
+    };
+    res.json(response);
   } catch (err) {
     next(err);
   }

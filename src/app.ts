@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import { initDatabase } from './config/initDB';
@@ -21,8 +21,8 @@ initDatabase().catch(err => {
   console.error('Failed to initialize database:', err);
 });
 
-app.get('/api/health', (_req, res: Response<ApiResponse>) => {
-  res.json({
+app.get('/api/health', (_req: Request, res: Response) => {
+  const response: ApiResponse = {
     success: true,
     data: {
       status: 'ok',
@@ -30,11 +30,12 @@ app.get('/api/health', (_req, res: Response<ApiResponse>) => {
       uptime: process.uptime()
     },
     message: 'Survey Backend API is running'
-  });
+  };
+  res.json(response);
 });
 
-app.get('/api', (_req, res: Response<ApiResponse>) => {
-  res.json({
+app.get('/api', (_req: Request, res: Response) => {
+  const response: ApiResponse = {
     success: true,
     data: {
       name: 'Survey Backend API',
@@ -48,7 +49,8 @@ app.get('/api', (_req, res: Response<ApiResponse>) => {
         health: '/api/health'
       }
     }
-  });
+  };
+  res.json(response);
 });
 
 app.use('/api/surveys', surveyRoutes);

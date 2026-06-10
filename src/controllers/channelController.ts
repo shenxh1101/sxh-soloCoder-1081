@@ -3,7 +3,7 @@ import * as channelService from '../services/channelService';
 import { validateRequest, channelCreateSchema } from '../validation/schemas';
 import { ApiResponse } from '../types';
 
-export async function createChannel(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function createChannel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const validation = validateRequest(channelCreateSchema, req.body);
     if (validation.error) {
@@ -12,13 +12,14 @@ export async function createChannel(req: Request, res: Response<ApiResponse>, ne
     }
 
     const channel = await channelService.createChannel(req.body);
-    res.json({ success: true, data: channel, message: 'Channel created successfully' });
+    const response: ApiResponse = { success: true, data: channel, message: 'Channel created successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getChannel(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getChannel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const channel = await channelService.getChannelById(id);
@@ -28,13 +29,14 @@ export async function getChannel(req: Request, res: Response<ApiResponse>, next:
       return;
     }
 
-    res.json({ success: true, data: channel });
+    const response: ApiResponse = { success: true, data: channel };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function getChannelsBySurvey(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function getChannelsBySurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const includeStats = req.query.includeStats === 'true';
@@ -46,13 +48,14 @@ export async function getChannelsBySurvey(req: Request, res: Response<ApiRespons
       channels = await channelService.getChannelsBySurveyId(surveyId);
     }
 
-    res.json({ success: true, data: channels });
+    const response: ApiResponse = { success: true, data: channels };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function generateSurveyLink(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function generateSurveyLink(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { surveyId } = req.params;
     const { channelCode, baseUrl } = req.body;
@@ -64,20 +67,21 @@ export async function generateSurveyLink(req: Request, res: Response<ApiResponse
       channelCode
     );
 
-    res.json({
+    const response: ApiResponse = {
       success: true,
       data: {
         survey_id: surveyId,
         channel_code: channelCode || null,
         link
       }
-    });
+    };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function generateChannelLink(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function generateChannelLink(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const { baseUrl } = req.body;
@@ -85,19 +89,20 @@ export async function generateChannelLink(req: Request, res: Response<ApiRespons
     const defaultBaseUrl = `${req.protocol}://${req.get('host')}`;
     const link = await channelService.generateChannelLink(id, baseUrl || defaultBaseUrl);
 
-    res.json({
+    const response: ApiResponse = {
       success: true,
       data: {
         channel_id: id,
         link
       }
-    });
+    };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function updateChannel(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function updateChannel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     const { name } = req.body;
@@ -108,17 +113,19 @@ export async function updateChannel(req: Request, res: Response<ApiResponse>, ne
     }
 
     const channel = await channelService.updateChannel(id, name);
-    res.json({ success: true, data: channel, message: 'Channel updated successfully' });
+    const response: ApiResponse = { success: true, data: channel, message: 'Channel updated successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
 }
 
-export async function deleteChannel(req: Request, res: Response<ApiResponse>, next: NextFunction): Promise<void> {
+export async function deleteChannel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
     await channelService.deleteChannel(id);
-    res.json({ success: true, message: 'Channel deleted successfully' });
+    const response: ApiResponse = { success: true, message: 'Channel deleted successfully' };
+    res.json(response);
   } catch (err) {
     next(err);
   }
