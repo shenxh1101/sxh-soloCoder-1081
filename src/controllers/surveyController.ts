@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import * as surveyService from '../services/surveyService';
-import { validateRequest, surveyCreateSchema, surveyUpdateSchema } from '../validation/schemas';
+import { validateRequest, surveyCreateSchema, surveyUpdateSchema, publishSurveySchema } from '../validation/schemas';
 import { ApiResponse, SurveyStatus } from '../types';
+import * as versionService from '../services/versionService';
 
 export async function createSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -111,6 +112,66 @@ export async function checkAvailability(req: Request, res: Response, next: NextF
     const isTest = req.query.isTest === 'true';
     const result = await surveyService.checkSurveyAvailability(id, userId, isTest);
     const response: ApiResponse = { success: true, data: result };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function checkPublishReadiness(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const result = await surveyService.checkPublishReadiness(id);
+    const response: ApiResponse = { success: true, data: result };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function publishSurvey(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const validation = validateRequest(publishSurveySchema, req.body);
+    if (validation.error) {
+      res.status(400).json({ success: false, message: validation.error });
+      return;
+    }
+
+    const result = await surveyService.publishSurvey(id, req.body?.published_by);
+    const response: ApiResponse = {
+      success: true,
+      data: result,
+      message: `Survey published successfully as version ${result.version.version}`
+    };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getSurveyVersions(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const versions = await versionService.getVersionsBySurveyId(id);
+    const response: ApiResponse = { success: true, data: versions };
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getSurveyVersion(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id, versionId } = req.params;
+    const version = await versionService.getVersionById(versionId);
+
+    if (!version || version.survey_id !== id) {
+      res.status(404).json({ success: false, message: 'Version not found for this survey' });
+      return;
+    }
+
+    const response: ApiResponse = { success: true, data: version };
     res.json(response);
   } catch (err) {
     next(err);

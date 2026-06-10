@@ -52,7 +52,7 @@ export const questionCreateSchema = Joi.object({
     })
   ).when('type', {
     is: Joi.string().valid('single', 'multiple'),
-    then: Joi.array().min(1).required(),
+    then: Joi.array().required(),
     otherwise: Joi.optional()
   })
 });
@@ -87,7 +87,19 @@ export const questionUpdateSchema = Joi.object({
 
 export const channelCreateSchema = Joi.object({
   survey_id: Joi.string().required(),
-  name: Joi.string().required().max(100)
+  name: Joi.string().required().min(1).max(100),
+  quota: Joi.number().integer().positive().allow(null),
+  close_time: Joi.string().isoDate().allow(null)
+});
+
+export const channelUpdateSchema = Joi.object({
+  name: Joi.string().min(1).max(100),
+  quota: Joi.number().integer().positive().allow(null),
+  close_time: Joi.string().isoDate().allow(null)
+}).or('name', 'quota', 'close_time');
+
+export const publishSurveySchema = Joi.object({
+  published_by: Joi.string().max(100).allow(null)
 });
 
 export const responseSubmissionSchema = Joi.object({

@@ -1,7 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import db from '../config/database';
-import { Survey, SurveyStatus } from '../types';
+import { Survey, SurveyStatus, PublishCheckResult, PublishCheckError, Question, Option, SkipLogic } from '../types';
 import { AppError } from '../middleware/errorHandler';
+import { createVersion, getLatestVersion } from './versionService';
 
 export interface SurveyCreateData {
   title: string;
@@ -255,5 +256,185 @@ export async function checkSurveyAvailability(
   return {
     available: true,
     survey
+  };
+}
+
+export async function checkPublishReadiness(surveyId: string): Promise<PublishCheckResult> {
+  const errors: PublishCheckError[] = [];
+  const warnings: PublishCheckError[] = [];
+
+  const survey = await getSurveyById(surveyId);
+  if (!survey) {
+    throw new AppError('Survey not found', 404);
+  }
+
+  const questionsStmt = db.prepare('SELECT * FROM questions WHERE survey_id = ? ORDER BY sort_order');
+  const questions = await questionsStmt.all(surveyId) as Question[];
+
+  if (questions.length === 0) {
+    errors.push({
+      code: 'NO_QUESTIONS',
+      message: '问卷没有任何题目，请至少添加一道题目后再发布'
+    });
+    return { canPublish: false, errors, warnings };
+  }
+
+  const questionIdMap = new Map(questions.map(q => [q.id, q]));
+  const questionIndexMap = new Map(questions.map((q, i) => [q.id, i]));
+
+  for (const question of questions) {
+    if (question.type === 'single' || question.type === 'multiple') {
+      const optionsStmt = db.prepare('SELECT * FROM options WHERE question_id = ? ORDER BY sort_order');
+      const options = await optionsStmt.all(question.id) as Option[];
+
+      if (options.length === 0) {
+        errors.push({
+          code: 'NO_OPTIONS',
+          message: `题目「${question.title}」（${question.type === 'single' ? '单选' : '多选'}）没有配置任何选项`,
+          questionId: question.id
+        });
+      }
+
+      for (const option of options) {
+        if (option.skip_to_question_id) {
+          if (!questionIdMap.has(option.skip_to_question_id)) {
+            errors.push({
+              code: 'INVALID_SKIP_TARGET',
+              message: `题目「${question.title}」的选项「${option.label}」配置的跳题目标不存在`,
+              questionId: question.id,
+              optionId: option.id
+            });
+          } else {
+            const currentIndex = questionIndexMap.get(question.id)!;
+            const targetIndex = questionIndexMap.get(option.skip_to_question_id)!;
+            if (targetIndex <= currentIndex) {
+              errors.push({
+                code: 'SKIP_TARGET_BEFORE_CURRENT',
+                message: `题目「${question.title}」的选项「${option.label}」配置的跳题目标指向了当前题目或之前的题目（只能向后跳）`,
+                questionId: question.id,
+                optionId: option.id
+              });
+            }
+          }
+        }
+      }
+    }
+
+    if (question.skip_logic) {
+      let skipLogic: SkipLogic;
+      try {
+        skipLogic = typeof question.skip_logic === 'string'
+          ? JSON.parse(question.skip_logic)
+          : question.skip_logic as SkipLogic;
+      } catch (e) {
+        errors.push({
+          code: 'INVALID_SKIP_LOGIC',
+          message: `题目「${question.title}」的跳题规则配置格式错误`,
+          questionId: question.id
+        });
+        continue;
+      }
+
+      const currentIndex = questionIndexMap.get(question.id)!;
+
+      for (const condition of skipLogic.conditions) {
+        if (!questionIdMap.has(condition.targetQuestionId)) {
+          errors.push({
+            code: 'INVALID_SKIP_TARGET',
+            message: `题目「${question.title}」的跳题规则中，选项「${condition.optionId}」的跳转目标不存在`,
+            questionId: question.id
+          });
+        } else {
+          const targetIndex = questionIndexMap.get(condition.targetQuestionId)!;
+          if (targetIndex <= currentIndex) {
+            errors.push({
+              code: 'SKIP_TARGET_BEFORE_CURRENT',
+              message: `题目「${question.title}」的跳题规则中，选项「${condition.optionId}」的跳转目标指向了当前题目或之前的题目（只能向后跳）`,
+              questionId: question.id
+            });
+          }
+        }
+      }
+
+      if (skipLogic.defaultTarget) {
+        if (!questionIdMap.has(skipLogic.defaultTarget)) {
+          errors.push({
+            code: 'INVALID_SKIP_TARGET',
+            message: `题目「${question.title}」的跳题规则中，默认跳转目标不存在`,
+            questionId: question.id
+          });
+        } else {
+          const targetIndex = questionIndexMap.get(skipLogic.defaultTarget)!;
+          if (targetIndex <= currentIndex) {
+            errors.push({
+              code: 'SKIP_TARGET_BEFORE_CURRENT',
+              message: `题目「${question.title}」的跳题规则中，默认跳转目标指向了当前题目或之前的题目（只能向后跳）`,
+              questionId: question.id
+            });
+          }
+        }
+      }
+    }
+
+    if (question.type === 'rating' && (!question.max_score || question.max_score <= 0)) {
+      warnings.push({
+        code: 'NO_MAX_SCORE',
+        message: `评分题「${question.title}」没有配置最高分，默认使用 5 分制`,
+        questionId: question.id
+      });
+    }
+
+    if (question.type === 'text' && question.is_required) {
+      warnings.push({
+        code: 'REQUIRED_TEXT_QUESTION',
+        message: `填空题「${question.title}」设置为必答，可能会降低用户完成率`,
+        questionId: question.id
+      });
+    }
+  }
+
+  if (questions.every(q => !q.is_required)) {
+    warnings.push({
+      code: 'NO_REQUIRED_QUESTIONS',
+      message: '问卷中没有设置任何必答题，用户可以直接提交空答卷'
+    });
+  }
+
+  if (!survey.start_time || !survey.end_time) {
+    warnings.push({
+      code: 'NO_TIME_LIMIT',
+      message: '问卷没有设置有效期，发布后将长期有效直到手动关闭'
+    });
+  }
+
+  return {
+    canPublish: errors.length === 0,
+    errors,
+    warnings
+  };
+}
+
+export async function publishSurvey(surveyId: string, publishedBy?: string): Promise<{
+  survey: Survey;
+  version: { id: string; version: number };
+}> {
+  const checkResult = await checkPublishReadiness(surveyId);
+  if (!checkResult.canPublish) {
+    const errorMessages = checkResult.errors.map(e => `[${e.code}] ${e.message}`).join('; ');
+    throw new AppError(`发布预检不通过: ${errorMessages}`, 400);
+  }
+
+  const version = await createVersion(surveyId, publishedBy);
+
+  const stmt = db.prepare(`
+    UPDATE surveys SET status = 'active', updated_at = ? WHERE id = ?
+  `);
+  await stmt.run(new Date().toISOString(), surveyId);
+
+  const updatedSurvey = await getSurveyById(surveyId);
+
+  return {
+    survey: updatedSurvey as Survey,
+    version: { id: version.id, version: version.version }
   };
 }

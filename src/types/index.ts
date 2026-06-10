@@ -2,6 +2,8 @@ export type QuestionType = 'single' | 'multiple' | 'text' | 'rating';
 
 export type SurveyStatus = 'draft' | 'active' | 'closed';
 
+export type ChannelStatus = 'normal' | 'quota_exceeded' | 'expired' | 'closed';
+
 export interface Survey {
   id: string;
   title: string;
@@ -57,18 +59,52 @@ export interface Channel {
   survey_id: string;
   name: string;
   code: string;
+  quota?: number;
+  close_time?: string;
   created_at: string;
+}
+
+export interface SurveyVersion {
+  id: string;
+  survey_id: string;
+  version: number;
+  snapshot: string;
+  published_at: string;
+  published_by?: string;
+  snapshotData?: SurveySnapshot;
+}
+
+export interface SurveySnapshot {
+  survey: Survey;
+  questions: Question[];
+  options: Option[];
+}
+
+export interface PublishCheckError {
+  code: string;
+  message: string;
+  questionId?: string;
+  optionId?: string;
+}
+
+export interface PublishCheckResult {
+  canPublish: boolean;
+  errors: PublishCheckError[];
+  warnings: PublishCheckError[];
 }
 
 export interface Response {
   id: string;
   survey_id: string;
   channel_id?: string;
+  version_id?: string;
   user_id?: string;
   ip_address?: string;
   submitted_at: string;
   is_test: boolean;
+  channel_status: ChannelStatus;
   answers?: Answer[];
+  version?: SurveyVersion;
 }
 
 export interface Answer {
@@ -94,6 +130,18 @@ export interface ResponseSubmission {
   user_id?: string;
   is_test?: boolean;
   answers: AnswerSubmission[];
+}
+
+export interface ChannelStats {
+  id: string;
+  name: string;
+  code: string;
+  quota?: number;
+  close_time?: string;
+  totalSubmissions: number;
+  validSubmissions: number;
+  testSubmissions: number;
+  blockedSubmissions: number;
 }
 
 export interface ApiResponse<T = any> {

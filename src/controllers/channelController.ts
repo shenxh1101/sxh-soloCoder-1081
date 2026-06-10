@@ -105,14 +105,19 @@ export async function generateChannelLink(req: Request, res: Response, next: Nex
 export async function updateChannel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, quota, close_time } = req.body;
 
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ success: false, message: 'Channel name is required' });
+    const updateData: channelService.ChannelUpdateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (quota !== undefined) updateData.quota = quota;
+    if (close_time !== undefined) updateData.close_time = close_time;
+
+    if (Object.keys(updateData).length === 0) {
+      res.status(400).json({ success: false, message: 'At least one field (name, quota, close_time) is required' });
       return;
     }
 
-    const channel = await channelService.updateChannel(id, name);
+    const channel = await channelService.updateChannel(id, updateData);
     const response: ApiResponse = { success: true, data: channel, message: 'Channel updated successfully' };
     res.json(response);
   } catch (err) {

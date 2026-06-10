@@ -1,12 +1,20 @@
 import { v4 as uuidv4 } from 'uuid';
 import db from '../config/database';
-import { Channel } from '../types';
+import { Channel, ChannelStats } from '../types';
 import { AppError } from '../middleware/errorHandler';
 import { getSurveyById } from './surveyService';
 
 export interface ChannelCreateData {
   survey_id: string;
   name: string;
+  quota?: number;
+  close_time?: string;
+}
+
+export interface ChannelUpdateData {
+  name?: string;
+  quota?: number | null;
+  close_time?: string | null;
 }
 
 function generateChannelCode(): string {
@@ -23,12 +31,28 @@ export async function createChannel(data: ChannelCreateData): Promise<Channel> {
   const code = generateChannelCode();
   const now = new Date().toISOString();
 
+  if (data.quota !== undefined && data.quota !== null && data.quota <= 0) {
+    throw new AppError('Channel quota must be a positive number', 400);
+  }
+
+  if (data.close_time && new Date(data.close_time) < new Date()) {
+    throw new AppError('Channel close time cannot be in the past', 400);
+  }
+
   const stmt = db.prepare(`
-    INSERT INTO channels (id, survey_id, name, code, created_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO channels (id, survey_id, name, code, quota, close_time, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  await stmt.run(id, data.survey_id, data.name, code, now);
+  await stmt.run(
+    id,
+    data.survey_id,
+    data.name,
+    code,
+    data.quota !== undefined ? data.quota : null,
+    data.close_time || null,
+    now
+  );
 
   return (await getChannelById(id)) as Channel;
 }
@@ -53,19 +77,28 @@ export async function getChannelsBySurveyId(surveyId: string): Promise<Channel[]
   return await stmt.all(surveyId) as Channel[];
 }
 
-export async function getChannelWithStats(surveyId: string): Promise<Array<Channel & { response_count: number }>> {
+export async function getChannelWithStats(surveyId: string): Promise<ChannelStats[]> {
   await getChannelsBySurveyId(surveyId);
 
   const stmt = db.prepare(`
-    SELECT c.*, COUNT(r.id) as response_count
+    SELECT 
+      c.id,
+      c.name,
+      c.code,
+      c.quota,
+      c.close_time,
+      COUNT(DISTINCT r.id) as totalSubmissions,
+      COUNT(DISTINCT CASE WHEN r.is_test = 0 THEN r.id END) as validSubmissions,
+      COUNT(DISTINCT CASE WHEN r.is_test = 1 THEN r.id END) as testSubmissions,
+      COUNT(DISTINCT CASE WHEN r.channel_status != 'normal' THEN r.id END) as blockedSubmissions
     FROM channels c
-    LEFT JOIN responses r ON c.id = r.channel_id AND r.is_test = 0
+    LEFT JOIN responses r ON c.id = r.channel_id
     WHERE c.survey_id = ?
     GROUP BY c.id
     ORDER BY c.created_at DESC
   `);
 
-  return await stmt.all(surveyId) as Array<Channel & { response_count: number }>;
+  return await stmt.all(surveyId) as ChannelStats[];
 }
 
 export async function generateSurveyLink(surveyId: string, baseUrl: string, channelCode?: string): Promise<string> {
@@ -104,14 +137,44 @@ export async function deleteChannel(id: string): Promise<void> {
   await stmt.run(id);
 }
 
-export async function updateChannel(id: string, name: string): Promise<Channel> {
+export async function updateChannel(id: string, data: ChannelUpdateData): Promise<Channel> {
   const channel = await getChannelById(id);
   if (!channel) {
     throw new AppError('Channel not found', 404);
   }
 
-  const stmt = db.prepare('UPDATE channels SET name = ? WHERE id = ?');
-  await stmt.run(name, id);
+  if (data.quota !== undefined && data.quota !== null && data.quota <= 0) {
+    throw new AppError('Channel quota must be a positive number', 400);
+  }
+
+  if (data.close_time !== undefined && data.close_time !== null && new Date(data.close_time) < new Date()) {
+    throw new AppError('Channel close time cannot be in the past', 400);
+  }
+
+  const updates: string[] = [];
+  const params: any[] = [];
+
+  if (data.name !== undefined) {
+    updates.push('name = ?');
+    params.push(data.name);
+  }
+  if (data.quota !== undefined) {
+    updates.push('quota = ?');
+    params.push(data.quota);
+  }
+  if (data.close_time !== undefined) {
+    updates.push('close_time = ?');
+    params.push(data.close_time);
+  }
+
+  if (updates.length === 0) {
+    return channel;
+  }
+
+  params.push(id);
+
+  const stmt = db.prepare(`UPDATE channels SET ${updates.join(', ')} WHERE id = ?`);
+  await stmt.run(...params);
 
   return (await getChannelById(id)) as Channel;
 }

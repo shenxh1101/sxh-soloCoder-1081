@@ -12,7 +12,12 @@ export interface ChannelStats {
   channel_name: string;
   channel_code: string;
   response_count: number;
+  valid_submissions: number;
+  test_submissions: number;
+  blocked_submissions: number;
   percentage: number;
+  quota?: number;
+  close_time?: string;
 }
 
 export interface OptionStats {
@@ -82,28 +87,43 @@ export async function getSurveyStats(surveyId: string, includeTest: boolean = fa
 }
 
 export async function getChannelStats(surveyId: string, includeTest: boolean = false): Promise<ChannelStats[]> {
-  await getChannelWithStats(surveyId);
-
   const testFilter = includeTest ? '' : 'AND r.is_test = 0';
   const stmt = db.prepare(`
-    SELECT c.id, c.name, c.code, COUNT(r.id) as count
+    SELECT 
+      c.id,
+      c.name,
+      c.code,
+      c.quota,
+      c.close_time,
+      COUNT(DISTINCT r.id) as total_count,
+      COUNT(DISTINCT CASE WHEN r.is_test = 0 THEN r.id END) as valid_count,
+      COUNT(DISTINCT CASE WHEN r.is_test = 1 THEN r.id END) as test_count,
+      COUNT(DISTINCT CASE WHEN r.channel_status != 'normal' THEN r.id END) as blocked_count
     FROM channels c
     LEFT JOIN responses r ON c.id = r.channel_id ${testFilter}
     WHERE c.survey_id = ?
     GROUP BY c.id
-    ORDER BY count DESC
+    ORDER BY total_count DESC
   `);
 
-  const results = await stmt.all(surveyId) as Array<{ id: string; name: string; code: string; count: number }>;
+  const results = await stmt.all(surveyId) as Array<{
+    id: string; name: string; code: string; quota?: number; close_time?: string;
+    total_count: number; valid_count: number; test_count: number; blocked_count: number;
+  }>;
 
-  const total = results.reduce((sum, r) => sum + r.count, 0);
+  const total = results.reduce((sum, r) => sum + r.total_count, 0);
 
   return results.map(r => ({
     channel_id: r.id,
     channel_name: r.name,
     channel_code: r.code,
-    response_count: r.count,
-    percentage: total > 0 ? Math.round((r.count / total) * 10000) / 100 : 0
+    response_count: r.total_count,
+    valid_submissions: r.valid_count,
+    test_submissions: r.test_count,
+    blocked_submissions: r.blocked_count,
+    percentage: total > 0 ? Math.round((r.total_count / total) * 10000) / 100 : 0,
+    quota: r.quota ?? undefined,
+    close_time: r.close_time ?? undefined
   }));
 }
 

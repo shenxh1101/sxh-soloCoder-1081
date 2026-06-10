@@ -23,6 +23,20 @@ function buildQuestionOptionMap(questions: Question[]): Map<string, Set<string>>
   return map;
 }
 
+function buildOptionSkipMap(questions: Question[]): Map<string, string> {
+  const map = new Map<string, string>();
+  questions.forEach(q => {
+    if (q.options) {
+      q.options.forEach(o => {
+        if (o.skip_to_question_id) {
+          map.set(o.id, o.skip_to_question_id);
+        }
+      });
+    }
+  });
+  return map;
+}
+
 function calculateSkippedQuestions(
   submission: ResponseSubmission,
   questions: Question[]
@@ -30,39 +44,54 @@ function calculateSkippedQuestions(
   const skipped = new Set<string>();
   const sortedQuestions = [...questions].sort((a, b) => a.sort_order - b.sort_order);
   const answerMap = new Map(submission.answers.map(a => [a.question_id, a]));
+  const optionSkipMap = buildOptionSkipMap(questions);
 
   sortedQuestions.forEach((question, index) => {
     if (skipped.has(question.id)) return;
 
     const answer = answerMap.get(question.id);
-    if (!answer || !question.skip_logic) return;
-
-    const skipLogic = question.skip_logic as SkipLogic;
-    if (!skipLogic.conditions || skipLogic.conditions.length === 0) return;
+    if (!answer) return;
 
     const selectedOptionIds = answer.option_ids || [];
 
-    for (const condition of skipLogic.conditions) {
-      if (selectedOptionIds.includes(condition.optionId)) {
-        const targetIndex = sortedQuestions.findIndex(q => q.id === condition.targetQuestionId);
+    for (const optionId of selectedOptionIds) {
+      const skipTarget = optionSkipMap.get(optionId);
+      if (skipTarget) {
+        const targetIndex = sortedQuestions.findIndex(q => q.id === skipTarget);
         if (targetIndex > index) {
           for (let i = index + 1; i < targetIndex; i++) {
             skipped.add(sortedQuestions[i].id);
           }
         }
-        break;
       }
     }
 
-    if (skipLogic.defaultTarget) {
-      const hasMatchingCondition = skipLogic.conditions.some(c =>
-        selectedOptionIds.includes(c.optionId)
-      );
-      if (!hasMatchingCondition) {
-        const targetIndex = sortedQuestions.findIndex(q => q.id === skipLogic.defaultTarget);
-        if (targetIndex > index) {
-          for (let i = index + 1; i < targetIndex; i++) {
-            skipped.add(sortedQuestions[i].id);
+    if (question.skip_logic) {
+      const skipLogic = question.skip_logic as SkipLogic;
+      if (skipLogic.conditions && skipLogic.conditions.length > 0) {
+        for (const condition of skipLogic.conditions) {
+          if (selectedOptionIds.includes(condition.optionId)) {
+            const targetIndex = sortedQuestions.findIndex(q => q.id === condition.targetQuestionId);
+            if (targetIndex > index) {
+              for (let i = index + 1; i < targetIndex; i++) {
+                skipped.add(sortedQuestions[i].id);
+              }
+            }
+            break;
+          }
+        }
+
+        if (skipLogic.defaultTarget) {
+          const hasMatchingCondition = skipLogic.conditions.some(c =>
+            selectedOptionIds.includes(c.optionId)
+          );
+          if (!hasMatchingCondition) {
+            const targetIndex = sortedQuestions.findIndex(q => q.id === skipLogic.defaultTarget);
+            if (targetIndex > index) {
+              for (let i = index + 1; i < targetIndex; i++) {
+                skipped.add(sortedQuestions[i].id);
+              }
+            }
           }
         }
       }
@@ -79,6 +108,22 @@ export function validateResponse(
   const errors: ValidationError[] = [];
   const questionOptionMap = buildQuestionOptionMap(questions);
   const skippedQuestions = calculateSkippedQuestions(submission, questions);
+
+  const questionMap = new Map(questions.map(q => [q.id, q]));
+  for (const question of questions) {
+    if ((question.type === 'single' || question.type === 'multiple') &&
+        (!question.options || question.options.length === 0)) {
+      errors.push({
+        questionId: question.id,
+        questionTitle: question.title,
+        error: `Question '${question.title}' (${question.type === 'single' ? 'single' : 'multiple'} choice) has no valid options configured, cannot accept submission`
+      });
+    }
+  }
+
+  if (errors.length > 0) {
+    return { valid: false, errors };
+  }
 
   questions.forEach(question => {
     const answer = submission.answers.find(a => a.question_id === question.id);
@@ -109,7 +154,13 @@ export function validateResponse(
           });
         } else {
           const validOptionIds = questionOptionMap.get(question.id);
-          if (validOptionIds) {
+          if (!validOptionIds || validOptionIds.size === 0) {
+            errors.push({
+              questionId: question.id,
+              questionTitle: question.title,
+              error: `Question '${question.title}' has no valid options configured`
+            });
+          } else {
             const invalidOptions = answer.option_ids.filter(id => !validOptionIds.has(id));
             if (invalidOptions.length > 0) {
               errors.push({
@@ -131,7 +182,13 @@ export function validateResponse(
           });
         } else {
           const validOptionIds = questionOptionMap.get(question.id);
-          if (validOptionIds) {
+          if (!validOptionIds || validOptionIds.size === 0) {
+            errors.push({
+              questionId: question.id,
+              questionTitle: question.title,
+              error: `Question '${question.title}' has no valid options configured`
+            });
+          } else {
             const invalidOptions = answer.option_ids.filter(id => !validOptionIds.has(id));
             if (invalidOptions.length > 0) {
               errors.push({
@@ -180,10 +237,53 @@ export function validateResponse(
   };
 }
 
+async function checkChannelAvailability(channelId: string, isTest: boolean): Promise<{
+  available: boolean;
+  reason?: string;
+  errorCode?: string;
+  status: 'normal' | 'quota_exceeded' | 'expired';
+}> {
+  const channelStmt = db.prepare('SELECT * FROM channels WHERE id = ?');
+  const channel = await channelStmt.get(channelId) as any;
+  if (!channel) {
+    return { available: false, reason: 'Channel not found', errorCode: 'CHANNEL_NOT_FOUND', status: 'normal' };
+  }
+
+  const now = new Date();
+
+  if (channel.close_time && new Date(channel.close_time) < now) {
+    return {
+      available: false,
+      reason: `Channel '${channel.name}' has expired, closed at ${channel.close_time}`,
+      errorCode: 'CHANNEL_EXPIRED',
+      status: 'expired'
+    };
+  }
+
+  if (channel.quota !== null && channel.quota !== undefined) {
+    const countStmt = db.prepare(`
+      SELECT COUNT(*) as count FROM responses
+      WHERE channel_id = ? AND is_test = ?
+    `);
+    const countResult = await countStmt.get(channelId, isTest ? 1 : 0) as { count: number };
+
+    if (countResult.count >= channel.quota) {
+      return {
+        available: false,
+        reason: `Channel '${channel.name}' has exceeded its quota (${countResult.count}/${channel.quota})`,
+        errorCode: 'CHANNEL_QUOTA_EXCEEDED',
+        status: 'quota_exceeded'
+      };
+    }
+  }
+
+  return { available: true, status: 'normal' };
+}
+
 export async function submitResponse(
   submission: ResponseSubmission,
   ipAddress?: string
-): Promise<{ responseId: string; submittedAt: string }> {
+): Promise<{ responseId: string; submittedAt: string; versionId?: string; version?: number }> {
   const survey = await getSurveyById(submission.survey_id);
   if (!survey) {
     throw new AppError('Survey not found', 404);
@@ -203,19 +303,38 @@ export async function submitResponse(
     throw new AppError('User ID is required for non-anonymous surveys', 400);
   }
 
-  const questions = await getQuestionsBySurveyId(submission.survey_id);
-  const validation = validateResponse(submission, questions);
-  if (!validation.valid) {
-    throw new AppError(`Validation failed: ${validation.errors.map(e => e.error).join('; ')}`, 400);
-  }
-
   let channelId: string | undefined;
+  let channelStatus: 'normal' | 'quota_exceeded' | 'expired' = 'normal';
   if (submission.channel_code) {
     const channel = await getChannelByCode(submission.channel_code);
     if (!channel || channel.survey_id !== submission.survey_id) {
       throw new AppError('Invalid channel code', 400);
     }
     channelId = channel.id;
+
+    const channelCheck = await checkChannelAvailability(channelId, isTest);
+    if (!channelCheck.available) {
+      throw new AppError(
+        `[${channelCheck.errorCode}] ${channelCheck.reason}`,
+        403
+      );
+    }
+    channelStatus = channelCheck.status;
+  }
+
+  const { getLatestVersion } = await import('./versionService');
+  const latestVersion = await getLatestVersion(submission.survey_id);
+  let versionId: string | undefined;
+  let versionNumber: number | undefined;
+  if (latestVersion) {
+    versionId = latestVersion.id;
+    versionNumber = latestVersion.version;
+  }
+
+  const questions = await getQuestionsBySurveyId(submission.survey_id);
+  const validation = validateResponse(submission, questions);
+  if (!validation.valid) {
+    throw new AppError(`Validation failed: ${validation.errors.map(e => e.error).join('; ')}`, 400);
   }
 
   const responseId = uuidv4();
@@ -226,18 +345,20 @@ export async function submitResponse(
 
     const responseStmt = db.prepare(`
       INSERT INTO responses (
-        id, survey_id, channel_id, user_id, ip_address, submitted_at, is_test
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        id, survey_id, channel_id, version_id, user_id, ip_address, submitted_at, is_test, channel_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     await responseStmt.run(
       responseId,
       submission.survey_id,
       channelId || null,
+      versionId || null,
       submission.user_id || null,
       ipAddress || null,
       now,
-      submission.is_test ?? false
+      submission.is_test ?? false,
+      channelStatus
     );
 
     const answerStmt = db.prepare(`
@@ -264,7 +385,7 @@ export async function submitResponse(
     throw err;
   }
 
-  return { responseId, submittedAt: now };
+  return { responseId, submittedAt: now, versionId, version: versionNumber };
 }
 
 export async function getResponseById(id: string): Promise<(Response & { answers: Answer[] }) | undefined> {
