@@ -239,6 +239,7 @@ export async function checkSurveyAvailability(
     const stmt = db.prepare(`
       SELECT COUNT(*) as count FROM responses
       WHERE survey_id = ? AND user_id = ? ${countTestSubmissions ? '' : 'AND is_test = 0'}
+      AND channel_status = 'normal'
     `);
     const result = await stmt.get(surveyId, userId) as { count: number };
 

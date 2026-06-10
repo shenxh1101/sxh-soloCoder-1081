@@ -588,6 +588,7 @@ export async function getUserSubmissionCount(
   const stmt = db.prepare(`
     SELECT COUNT(*) as count FROM responses
     WHERE survey_id = ? AND user_id = ? ${includeTest ? '' : 'AND is_test = 0'}
+    AND channel_status = 'normal'
   `);
   const result = await stmt.get(surveyId, userId) as { count: number };
   return result.count;

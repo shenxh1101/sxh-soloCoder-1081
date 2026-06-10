@@ -40,12 +40,16 @@ export async function getChannelsBySurvey(req: Request, res: Response, next: Nex
   try {
     const { surveyId } = req.params;
     const includeStats = req.query.includeStats === 'true';
+    const versionId = req.query.versionId as string | undefined;
 
     let channels;
     if (includeStats) {
-      channels = await channelService.getChannelWithStats(surveyId);
+      channels = await channelService.getChannelWithStats(surveyId, versionId);
     } else {
       channels = await channelService.getChannelsBySurveyId(surveyId);
+      if (versionId) {
+        channels = channels.filter(c => c.version_id === versionId);
+      }
     }
 
     const response: ApiResponse = { success: true, data: channels };

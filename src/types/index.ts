@@ -159,6 +159,52 @@ export interface ChannelStats {
   blocked_submissions: number;
   percentage: number;
   recent_blocks?: BlockRecord[];
+  block_reason_distribution?: Array<{ reason: string; count: number }>;
+}
+
+export interface VersionComparisonQuestion {
+  question_id: string;
+  question_title: string;
+  question_type: QuestionType;
+  change_type: 'added' | 'removed' | 'unchanged' | 'modified';
+  v1_stats?: {
+    total_responses: number;
+    option_stats?: Array<{ option_id: string; option_label: string; count: number; percentage: number }>;
+    average_score?: number;
+  };
+  v2_stats?: {
+    total_responses: number;
+    option_stats?: Array<{ option_id: string; option_label: string; count: number; percentage: number }>;
+    average_score?: number;
+  };
+  changes?: {
+    title_changed?: boolean;
+    options_added?: string[];
+    options_removed?: string[];
+    options_modified?: string[];
+  };
+}
+
+export interface VersionComparisonResult {
+  v1: { id: string; version: number; published_at: string };
+  v2: { id: string; version: number; published_at: string };
+  questions: VersionComparisonQuestion[];
+  summary: {
+    total_questions_v1: number;
+    total_questions_v2: number;
+    questions_added: number;
+    questions_removed: number;
+    questions_modified: number;
+    questions_unchanged: number;
+  };
+}
+
+export interface ExportOptions {
+  format: 'csv' | 'json';
+  versionId?: string;
+  channelId?: string;
+  includeTest: boolean;
+  includeBlocked?: boolean;
 }
 
 export interface ApiResponse<T = any> {
